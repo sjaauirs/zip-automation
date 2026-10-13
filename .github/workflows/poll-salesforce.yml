@@ -64,17 +64,23 @@ jobs:
           STATE_FILE: .state/processed.json
         run: python scripts/poll_salesforce.py --limit "${{ inputs.limit || '5' }}"
 
-      # Which ZIPs have been handled lives in the repo, not a database. Committing
-      # only on change keeps idle runs from generating noise commits.
+      # Which ZIPs have been handled lives in the repo, not a database. This is
+      # the poll's only memory of what it has already done, so .state must NOT be
+      # gitignored -- see .gitignore for why that breaks things subtly.
+      #
+      # Committed only when it actually changes, so idle runs stay quiet.
       - name: Commit state
         if: always()
         run: |
-          mkdir -p .state
           git config user.name  "zip-automation"
           git config user.email "zip-automation@users.noreply.github.com"
           git add .state
-          git diff --staged --quiet || git commit -m "Record processed ZIPs"
-          git push
+          if git diff --staged --quiet; then
+            echo "No state change to record."
+          else
+            git commit -m "Record processed ZIPs"
+            git push
+          fi
 
       - name: Upload run log
         if: always()

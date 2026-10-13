@@ -1,3 +1,11 @@
-.state/
+# NOTE: .state/ is deliberately NOT ignored.
+#
+# It holds the list of already-processed ContentVersion ids, and the workflow
+# commits it back to the repo. Gitignoring it breaks the poll in a way that is
+# easy to miss: every run re-processes the same ZIPs forever, re-reporting the
+# same results and failing on any whose repo already exists.
+#
+# Only caches belong here.
+
 __pycache__/
 *.pyc

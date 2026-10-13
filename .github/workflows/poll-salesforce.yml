@@ -1,0 +1,85 @@
+# Watches Salesforce for ZIPs attached to Accounts and publishes each new one as
+# a repo.
+#
+# This is the trigger for orgs that cannot run Apex or Flow, where Salesforce has
+# no way to notify us. The trade-off is latency: a repo appears within roughly one
+# polling interval rather than instantly.
+#
+# On an org WITH Apex, use zip-to-repo.yml instead and Salesforce will dispatch
+# immediately when the file lands.
+name: Poll Salesforce for ZIPs
+
+on:
+  schedule:
+    # GitHub's floor is 5 minutes and scheduled runs get delayed under load, so
+    # treat this as "about every 10 minutes", not a guarantee. Offset off the
+    # hour on purpose: everything else on the platform fires at :00.
+    - cron: '6,16,26,36,46,56 * * * *'
+  # Lets you process the backlog on demand instead of waiting for the next tick.
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: Max ZIPs to process this run
+        required: false
+        default: '5'
+
+# Needed to commit the processed-ids state file back to the repo.
+permissions:
+  contents: write
+
+# Never let two polls overlap: both would see the same unprocessed ZIPs and race
+# to create the same repo.
+concurrency:
+  group: poll-salesforce
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Poll and publish
+        env:
+          # A force:// auth URL. Reuses the connected app the Salesforce CLI
+          # already registered, which is the only option on orgs that forbid
+          # creating new connected apps. Obtain it with:
+          #   sf org auth show-sfdx-auth-url --target-org <alias>
+          SF_AUTH_URL: ${{ secrets.SF_AUTH_URL }}
+          SF_API_VERSION: ${{ vars.SF_API_VERSION || 'v62.0' }}
+
+          # Must be able to CREATE repositories: the built-in GITHUB_TOKEN cannot.
+          GH_TOKEN: ${{ secrets.GH_REPO_PAT }}
+          GH_OWNER: ${{ github.repository_owner }}
+
+          STATE_FILE: .state/processed.json
+        run: python scripts/poll_salesforce.py --limit "${{ inputs.limit || '5' }}"
+
+      # Which ZIPs have been handled lives in the repo, not a database. Committing
+      # only on change keeps idle runs from generating noise commits.
+      - name: Commit state
+        if: always()
+        run: |
+          mkdir -p .state
+          git config user.name  "zip-automation"
+          git config user.email "zip-automation@users.noreply.github.com"
+          git add .state
+          git diff --staged --quiet || git commit -m "Record processed ZIPs"
+          git push
+
+      - name: Upload run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: poll-log-${{ github.run_number }}
+          path: ${{ runner.temp }}/zip-to-repo/run-log.txt
+          if-no-files-found: warn

@@ -1,0 +1,70 @@
+# Wakes on the `repository_dispatch` event that Salesforce fires when a ZIP is
+# attached to an Account, then downloads that ZIP, unpacks it, and publishes its
+# contents as a new public repo.
+#
+# Everything heavy happens here rather than in Apex because a runner has disk and
+# can stream -- neither of which Salesforce has.
+name: ZIP to repo
+
+on:
+  repository_dispatch:
+    types: [zip-upload]
+  # Lets you re-run a failed handoff by hand from the Actions tab, or test
+  # without touching Salesforce.
+  workflow_dispatch:
+    inputs:
+      contentVersionId:
+        description: ContentVersion Id of the ZIP
+        required: true
+      accountId:
+        description: Account Id to write the result back to
+        required: true
+      fileName:
+        description: Original filename, e.g. my-app.zip
+        required: false
+        default: upload.zip
+
+# The default GITHUB_TOKEN cannot create repositories, so GH_REPO_PAT is used for
+# everything repo-related. These permissions cover the checkout only.
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Publish
+        env:
+          # --- Salesforce (Connected App, client-credentials flow) ---
+          SF_LOGIN_URL: ${{ vars.SF_LOGIN_URL || 'https://login.salesforce.com' }}
+          SF_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
+          SF_CLIENT_SECRET: ${{ secrets.SF_CLIENT_SECRET }}
+          SF_API_VERSION: ${{ vars.SF_API_VERSION || 'v62.0' }}
+
+          # --- GitHub (PAT that may create repos; the default token may not) ---
+          GH_TOKEN: ${{ secrets.GH_REPO_PAT }}
+          GH_OWNER: ${{ github.repository_owner }}
+
+          # --- Work item, from the dispatch payload ---
+          CONTENT_VERSION_ID: ${{ github.event.client_payload.contentVersionId || inputs.contentVersionId }}
+          ACCOUNT_ID: ${{ github.event.client_payload.accountId || inputs.accountId }}
+          FILE_NAME: ${{ github.event.client_payload.fileName || inputs.fileName }}
+        run: python scripts/zip_to_repo.py
+
+      # The run log is written to disk precisely so it survives a failure and can
+      # be inspected after the job has gone red.
+      - name: Upload run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zip-to-repo-log
+          path: ${{ runner.temp }}/zip-to-repo/run-log.txt
+          if-no-files-found: warn

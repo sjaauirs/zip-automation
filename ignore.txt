@@ -1,0 +1,16 @@
+# ZIP filenames that must NEVER be published as a repo.
+#
+# One pattern per line. Matching is case-insensitive, and a line matches if it is
+# a substring of the filename OR a glob (so "*.zip" would match everything).
+# Text after # is a comment.
+#
+# The name checked is the ZIP's filename as uploaded -- Salesforce calls it Title --
+# not the folder inside it. "front-end-rcm" therefore matches "front-end-rcm.zip".
+#
+# Nothing here is deleted from Salesforce. The file stays exactly where it is, and
+# simply never gets published. Remove a line and the next poll will pick it up.
+#
+# A file listed here is deliberately NOT recorded as processed, so it keeps showing
+# up in the run log as "skipped" -- that is how you can tell this list is working.
+
+front-end-rcm

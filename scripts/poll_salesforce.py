@@ -25,6 +25,7 @@ Usage
 """
 
 import argparse
+import fnmatch
 import json
 import os
 import sys
@@ -44,6 +45,35 @@ MAX_REMEMBERED = 500
 ID_CHUNK = 100
 
 STATE_PATH = Path(os.environ.get("STATE_FILE", ".state/processed.json"))
+# Names in here are never published. Committed to the repo so it is editable from
+# the GitHub UI without touching code.
+IGNORE_PATH = Path(os.environ.get("IGNORE_FILE", "ignore.txt"))
+
+
+# ------------------------------------------------------------------- ignore list
+
+
+def load_ignores():
+    """
+    Filename patterns that must never become a public repo.
+
+    Matching is case-insensitive and accepts substrings or globs, so both
+    "front-end-rcm" and "*.zip" do what you would expect. The name checked is the
+    ZIP's filename (Salesforce calls it Title), not the extracted folder.
+    """
+    if not IGNORE_PATH.exists():
+        return []
+    patterns = []
+    for line in IGNORE_PATH.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip().lower()
+        if line:
+            patterns.append(line)
+    return patterns
+
+
+def is_ignored(file_name, patterns):
+    name = file_name.lower()
+    return any(p in name or fnmatch.fnmatch(name, p) for p in patterns)
 
 
 # ------------------------------------------------------------------ salesforce
@@ -183,8 +213,22 @@ def main():
     candidates = find_zip_uploads(token, instance_url)
     z.log(f"Found {len(candidates)} ZIP(s) attached to Accounts.")
 
-    fresh = [c for c in candidates if c[0] not in already]
+    patterns = load_ignores()
+    fresh = []
+    skipped = set()
+    for candidate in candidates:
+        if candidate[0] in already:
+            continue
+        if is_ignored(candidate[2], patterns):
+            # Deliberately NOT marked as processed: they stay visible here, and
+            # removing the pattern later makes them publish on the next poll.
+            skipped.add(candidate[2])
+            continue
+        fresh.append(candidate)
+
     z.log(f"{len(fresh)} not yet processed.")
+    if skipped:
+        z.log(f"{len(skipped)} skipped by {IGNORE_PATH.name}: {', '.join(sorted(skipped))}")
 
     if args.dry_run:
         for version_id, account_id, file_name in fresh[:args.limit]:
